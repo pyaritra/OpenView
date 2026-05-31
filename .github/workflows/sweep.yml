@@ -34,11 +34,11 @@ jobs:
           # optional tuning (defaults shown):
           # SWEEP_TARGET_Z: "11"
           # SWEEP_BUDGET: "45000"
-        run: python sweep.py
+        run: python -u sweep.py
 
       - name: Build stats for the README
         if: always()
-        run: python stats.py
+        run: python -u stats.py
 
       - name: Commit snapshot
         if: always()
