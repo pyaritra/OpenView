@@ -1,0 +1,49 @@
+name: mapillary-sweep
+
+# Runs a slice of the global coverage sweep once a day and commits the result.
+# A full global pass spans ~2-3 weeks of daily runs (see ARCHIVE.md), then repeats.
+
+on:
+  schedule:
+    - cron: "17 3 * * *"        # daily at 03:17 UTC
+  workflow_dispatch: {}          # also runnable on demand from the Actions tab
+
+permissions:
+  contents: write                # needed to commit the snapshot back to the repo
+
+concurrency:
+  group: mapillary-sweep         # never let two runs overlap
+  cancel-in-progress: false
+
+jobs:
+  sweep:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - run: pip install mapbox-vector-tile
+
+      - name: Run sweep
+        env:
+          MAPILLARY_TOKEN: ${{ secrets.MAPILLARY_TOKEN }}
+          # optional tuning (defaults shown):
+          # SWEEP_TARGET_Z: "11"
+          # SWEEP_BUDGET: "45000"
+        run: python sweep.py
+
+      - name: Commit snapshot
+        run: |
+          git config user.name  "sweep-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add archive
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+          else
+            git commit -m "sweep $(date -u +%F)"
+            git pull --rebase --autostash
+            git push
+          fi

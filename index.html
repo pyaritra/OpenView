@@ -1,0 +1,434 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+<title>OPENVIEW — crowdsourced street-level coverage</title>
+
+<!-- MapLibre GL -->
+<link href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css" rel="stylesheet" />
+<script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+
+<!-- MapillaryJS (street-level viewer) -->
+<link href="https://unpkg.com/mapillary-js@4.1.2/dist/mapillary.css" rel="stylesheet" />
+<script src="https://unpkg.com/mapillary-js@4.1.2/dist/mapillary.js"></script>
+
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet" />
+
+<style>
+  :root{
+    --bg:#070a0f;
+    --panel:#0e131c;
+    --panel-2:#141b27;
+    --line:#1f2937;
+    --ink:#e8eef6;
+    --ink-dim:#8a97a8;
+    --ink-faint:#56616f;
+    --accent:#39c2ff;      /* fresh coverage */
+    --accent-old:#1c3a52;  /* old coverage */
+    --pano:#ffb238;        /* 360 panoramas */
+    --mono:'IBM Plex Mono',ui-monospace,monospace;
+    --sans:'IBM Plex Sans',system-ui,sans-serif;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--ink);font-family:var(--sans);overflow:hidden}
+  #map{position:absolute;inset:0}
+
+  /* ---- control panel ---- */
+  .panel{
+    position:absolute;top:14px;left:14px;z-index:5;width:300px;max-width:calc(100vw - 28px);
+    background:linear-gradient(180deg,var(--panel),#0b0f17);
+    border:1px solid var(--line);border-radius:0;
+    box-shadow:0 18px 50px -12px rgba(0,0,0,.7);
+    backdrop-filter:blur(6px);overflow:hidden;
+  }
+  .panel header{padding:14px 16px 12px;border-bottom:1px solid var(--line)}
+  .brand{font-family:var(--mono);font-weight:600;letter-spacing:.14em;font-size:13px;color:var(--ink)}
+  .brand b{color:var(--accent)}
+  .tag{font-family:var(--mono);font-size:10px;letter-spacing:.18em;color:var(--ink-faint);text-transform:uppercase;margin-top:5px}
+  .body{padding:14px 16px;max-height:calc(100vh - 140px);overflow-y:auto}
+  .sec{margin-bottom:18px}
+  .sec h3{font-family:var(--mono);font-size:10px;letter-spacing:.2em;text-transform:uppercase;color:var(--ink-dim);margin:0 0 9px;display:flex;align-items:center;gap:7px}
+  .sec h3::after{content:"";flex:1;height:1px;background:var(--line)}
+
+  .seg{display:grid;grid-template-columns:repeat(2,1fr);gap:6px}
+  .seg.three{grid-template-columns:repeat(3,1fr)}
+  .seg button, .preset{
+    font-family:var(--mono);font-size:11px;color:var(--ink-dim);
+    background:var(--panel-2);border:1px solid var(--line);border-radius:0;
+    padding:8px 6px;cursor:pointer;transition:.15s;letter-spacing:.02em;
+  }
+  .seg button:hover,.preset:hover{color:var(--ink);border-color:#33414f}
+  .seg button.on{color:var(--bg);background:var(--accent);border-color:var(--accent);font-weight:600}
+
+  .dates{display:flex;gap:8px;margin-bottom:9px}
+  .dates label{flex:1;font-family:var(--mono);font-size:9px;letter-spacing:.12em;color:var(--ink-faint);text-transform:uppercase}
+  .dates input{width:100%;margin-top:4px;background:var(--panel-2);border:1px solid var(--line);color:var(--ink);
+    font-family:var(--mono);font-size:11px;padding:6px 7px;border-radius:0;color-scheme:dark}
+  .presets{display:grid;grid-template-columns:repeat(4,1fr);gap:6px}
+
+  .toggle{display:flex;align-items:center;justify-content:space-between;padding:9px 0;cursor:pointer}
+  .toggle span{font-size:13px;color:var(--ink)}
+  .toggle small{display:block;color:var(--ink-faint);font-size:11px;margin-top:1px}
+  .sw{width:38px;height:21px;background:var(--line);border-radius:0;position:relative;transition:.2s;flex:none}
+  .sw::after{content:"";position:absolute;width:15px;height:15px;border-radius:0;background:var(--ink-dim);top:3px;left:3px;transition:.2s}
+  .toggle.on .sw{background:var(--accent)}
+  .toggle.on .sw::after{left:20px;background:var(--bg)}
+
+  .legend{font-family:var(--mono);font-size:11px;color:var(--ink-dim);line-height:1.9}
+  .legend i{display:inline-block;width:18px;height:3px;border-radius:0;vertical-align:middle;margin-right:8px}
+  .legend .dot{width:9px;height:9px;border-radius:0}
+  .gradient{height:7px;border-radius:0;margin:6px 0 4px;background:linear-gradient(90deg,var(--accent-old),var(--accent))}
+  .gradient-lbl{display:flex;justify-content:space-between;font-family:var(--mono);font-size:9px;color:var(--ink-faint);letter-spacing:.1em}
+
+  /* ---- search ---- */
+  .search{position:absolute;top:14px;left:50%;transform:translateX(-50%);z-index:6;width:min(420px,calc(100vw - 360px))}
+  .search input{width:100%;background:rgba(14,19,28,.92);border:1px solid var(--line);color:var(--ink);
+    font-family:var(--mono);font-size:13px;padding:11px 14px;border-radius:0;backdrop-filter:blur(6px);box-shadow:0 10px 30px -12px rgba(0,0,0,.6)}
+  .search input::placeholder{color:var(--ink-faint)}
+  .results{margin-top:6px;background:rgba(14,19,28,.97);border:1px solid var(--line);border-radius:0;overflow:hidden;backdrop-filter:blur(6px)}
+  .results div{padding:9px 14px;font-size:12px;cursor:pointer;border-bottom:1px solid var(--line);color:var(--ink-dim)}
+  .results div:last-child{border:0}
+  .results div:hover{background:var(--panel-2);color:var(--ink)}
+
+  /* ---- bottom-right credit ---- */
+  .credit{position:absolute;bottom:10px;right:10px;z-index:6;font-family:var(--mono);font-size:10px;
+    letter-spacing:.04em;color:var(--ink-faint);background:rgba(7,10,15,.72);border:1px solid var(--line);
+    padding:5px 9px;backdrop-filter:blur(4px)}
+  .credit a{color:var(--ink-dim);text-decoration:none}
+  .credit a:hover{color:var(--accent)}
+
+  /* ---- viewer ---- */
+  #viewer{position:absolute;top:0;right:0;bottom:0;width:42vw;min-width:340px;z-index:7;
+    background:#000;border-left:1px solid var(--line);transform:translateX(100%);transition:transform .32s cubic-bezier(.4,0,.2,1);display:flex;flex-direction:column}
+  #viewer.open{transform:none}
+  #mly{flex:1;position:relative}
+  .vbar{display:flex;align-items:center;justify-content:space-between;padding:10px 14px;background:var(--panel);border-bottom:1px solid var(--line)}
+  .vmeta{font-family:var(--mono);font-size:11px;color:var(--ink-dim);line-height:1.5}
+  .vmeta b{color:var(--ink);font-weight:500}
+  .vclose{background:var(--panel-2);border:1px solid var(--line);color:var(--ink-dim);font-family:var(--mono);
+    font-size:11px;padding:7px 11px;border-radius:0;cursor:pointer}
+  .vclose:hover{color:var(--ink)}
+  .attrib{position:absolute;bottom:8px;left:14px;z-index:5;font-family:var(--mono);font-size:10px;color:var(--ink-faint);
+    background:rgba(7,10,15,.7);padding:4px 9px;border-radius:0;letter-spacing:.04em}
+  .attrib a{color:var(--ink-dim);text-decoration:none}
+
+  /* ---- token gate ---- */
+  #gate{position:absolute;inset:0;z-index:20;background:rgba(7,10,15,.94);display:flex;align-items:center;justify-content:center;backdrop-filter:blur(4px)}
+  #gate.hide{display:none}
+  .gatebox{width:min(440px,90vw);background:var(--panel);border:1px solid var(--line);border-radius:0;padding:26px 28px}
+  .gatebox h2{font-family:var(--mono);font-size:15px;letter-spacing:.06em;margin:0 0 6px}
+  .gatebox p{color:var(--ink-dim);font-size:13px;line-height:1.6;margin:0 0 16px}
+  .gatebox a{color:var(--accent);text-decoration:none}
+  .gatebox input{width:100%;background:var(--panel-2);border:1px solid var(--line);color:var(--ink);
+    font-family:var(--mono);font-size:12px;padding:11px 13px;border-radius:0;margin-bottom:12px}
+  .gatebox button{width:100%;background:var(--accent);color:var(--bg);border:0;font-family:var(--mono);
+    font-weight:600;font-size:13px;padding:12px;border-radius:0;cursor:pointer;letter-spacing:.04em}
+
+  /* sharpen MapLibre's built-in controls */
+  .maplibregl-ctrl-group,.maplibregl-ctrl button,.maplibregl-ctrl,.maplibregl-popup-content,
+  .maplibregl-ctrl-attrib{border-radius:0 !important}
+
+  /* collapsible panel */
+  .panel header{cursor:pointer;display:flex;align-items:center;justify-content:space-between;gap:10px}
+  .panel header .htext{min-width:0}
+  .collapse-btn{flex:none;width:26px;height:26px;display:grid;place-items:center;background:var(--panel-2);
+    border:1px solid var(--line);color:var(--ink-dim);font-family:var(--mono);font-size:14px;line-height:1;transition:.15s}
+  .panel:hover .collapse-btn{color:var(--ink)}
+  .panel .body{transition:max-height .28s ease,opacity .2s ease,padding .28s ease}
+  .panel.collapsed .body{max-height:0;opacity:0;padding-top:0;padding-bottom:0;overflow:hidden}
+  .panel.collapsed header{border-bottom:0}
+  .panel.collapsed .tag{display:none}
+  .panel.collapsed .collapse-btn{transform:none}
+
+  @media(max-width:760px){
+    #viewer{width:100vw;top:auto;bottom:0;height:60vh;border-left:0;border-top:1px solid var(--line);transform:translateY(100%)}
+    #viewer.open{transform:none}
+    .search{width:calc(100vw - 28px);top:auto;bottom:14px;left:14px;transform:none}
+    .panel{width:calc(100vw - 28px)}
+  }
+</style>
+</head>
+<body>
+
+<div id="map"></div>
+
+<div class="credit">
+  <a id="srcLink" href="https://github.com/yourusername/openview" target="_blank" rel="noopener">source</a>
+  · thanks to ReAnna
+</div>
+
+<div class="search">
+  <input id="q" placeholder="search a place…" autocomplete="off" />
+  <div id="results" class="results" style="display:none"></div>
+</div>
+
+<div class="panel" id="panel">
+  <header id="panelHead">
+    <div class="htext">
+      <div class="brand">OPEN<b>VIEW</b></div>
+      <div class="tag">crowdsourced street-level coverage</div>
+    </div>
+    <div class="collapse-btn" id="collapseBtn">−</div>
+  </header>
+  <div class="body">
+
+    <div class="sec">
+      <h3>Base layer</h3>
+      <div class="seg three" id="basemaps">
+        <button data-base="dark" class="on">Dark</button>
+        <button data-base="light">Light</button>
+        <button data-base="sat">Satellite</button>
+        <button data-base="osm">OSM</button>
+        <button data-base="none">None</button>
+      </div>
+    </div>
+
+    <div class="sec">
+      <h3>Capture date</h3>
+      <div class="dates">
+        <label>From<input type="date" id="from" min="2013-01-01"></label>
+        <label>To<input type="date" id="to"></label>
+      </div>
+      <div class="presets">
+        <button class="preset" data-days="7">week</button>
+        <button class="preset" data-days="30">month</button>
+        <button class="preset" data-days="365">year</button>
+        <button class="preset" data-days="0">all</button>
+      </div>
+    </div>
+
+    <div class="sec">
+      <div class="toggle on" id="t-age">
+        <span>Color by recency<small>newer captures glow brighter</small></span>
+        <div class="sw"></div>
+      </div>
+      <div class="toggle" id="t-pano">
+        <span>360° panoramas only<small>hide flat / non-spherical images</small></span>
+        <div class="sw"></div>
+      </div>
+    </div>
+
+    <div class="sec">
+      <h3>Legend</h3>
+      <div class="legend">
+        <div><i style="background:var(--accent)"></i>image sequence</div>
+        <div><i class="dot" style="background:var(--pano)"></i>360° panorama</div>
+        <div class="gradient"></div>
+        <div class="gradient-lbl"><span id="lg-old">older</span><span id="lg-new">newer</span></div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<div id="viewer">
+  <div class="vbar">
+    <div class="vmeta" id="vmeta">click a coverage line to open imagery</div>
+    <button class="vclose" id="vclose">close ✕</button>
+  </div>
+  <div id="mly">
+    <div class="attrib">imagery © <a href="https://www.mapillary.com" target="_blank" rel="noopener">Mapillary</a> contributors · CC BY-SA</div>
+  </div>
+</div>
+
+<div id="gate">
+  <div class="gatebox">
+    <h2>Mapillary access token</h2>
+    <p>This app reads crowdsourced coverage from Mapillary. Create a free token at the
+       <a href="https://www.mapillary.com/dashboard/developers" target="_blank" rel="noopener">developer dashboard</a>
+       (Register an application → copy the <em>Client token</em>, format <code>MLY|…|…</code>) and paste it below.
+       To skip this prompt, hardcode it into <code>TOKEN</code> at the top of the file.</p>
+    <input id="tok" placeholder="MLY|xxxxxxxxxxxx|xxxxxxxxxxxxxxxx" />
+    <button id="tokgo">Load coverage</button>
+  </div>
+</div>
+
+<script>
+/* ============================================================
+   CONFIG — paste your Mapillary client token here to skip the gate
+   ============================================================ */
+let TOKEN = "MLY|26242742698734519|eee3bd3e12794ad4da21628b8590e76b";
+
+const MLY_TILES = t => `https://tiles.mapillary.com/maps/vtp/mly1_public/2/{z}/{x}/{y}?access_token=${t}`;
+const T2013 = Date.UTC(2013,0,1);
+
+/* ---------- base layer definitions (free raster sources) ---------- */
+const BASES = {
+  dark:  {tiles:["https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png"], attr:"© CARTO © OpenStreetMap"},
+  light: {tiles:["https://a.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png"], attr:"© CARTO © OpenStreetMap"},
+  sat:   {tiles:["https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"], attr:"© Esri"},
+  osm:   {tiles:["https://tile.openstreetmap.org/{z}/{x}/{y}.png"], attr:"© OpenStreetMap"},
+  none:  null
+};
+
+const map = new maplibregl.Map({
+  container:"map",
+  style:{version:8, sources:{}, layers:[{id:"bg",type:"background",paint:{"background-color":"#070a0f"}}],
+         glyphs:"https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf"},
+  center:[-87.6298,41.8781], zoom:13, attributionControl:false
+});
+map.addControl(new maplibregl.NavigationControl({showCompass:false}),"top-right");
+map.addControl(new maplibregl.AttributionControl({compact:true}),"bottom-left");
+
+/* ---------- base layer switching ---------- */
+let currentBase=null;
+function setBase(key){
+  if(currentBase){ if(map.getLayer("base"))map.removeLayer("base"); if(map.getSource("base"))map.removeSource("base"); }
+  currentBase=key;
+  const b=BASES[key];
+  if(!b) return;
+  map.addSource("base",{type:"raster",tiles:b.tiles,tileSize:256,attribution:b.attr});
+  map.addLayer({id:"base",type:"raster",source:"base"}, map.getLayer("seq")?"seq":undefined);
+}
+
+/* ---------- Mapillary coverage layers ---------- */
+function ageColor(){
+  // interpolate capture time -> dim(old) .. bright(new)
+  return ["interpolate",["linear"],["to-number",["get","captured_at"]],
+          T2013, "#1c3a52", Date.now(), "#39c2ff"];
+}
+function addCoverage(){
+  map.addSource("mapillary",{type:"vector",tiles:[MLY_TILES(TOKEN)],minzoom:0,maxzoom:14});
+
+  // generalized point coverage at world/continent zoom (data only exists z0-5)
+  map.addLayer({id:"overview",type:"circle","source":"mapillary","source-layer":"overview",
+    maxzoom:6, paint:{"circle-radius":["interpolate",["linear"],["zoom"],0,1.5,5,3],
+    "circle-color":["case",["==",["get","is_pano"],true],"#ffb238","#39c2ff"],"circle-opacity":.6}});
+
+  // sequences (lines) — visible from z6 upward, the lowest zoom Mapillary serves line geometry
+  map.addLayer({id:"seq",type:"line",source:"mapillary","source-layer":"sequence",minzoom:6,
+    layout:{"line-cap":"round","line-join":"round"},
+    paint:{"line-color":["case",["==",["get","is_pano"],true],"#ffb238",ageColor()],
+    "line-width":["interpolate",["linear"],["zoom"],6,1,11,1.6,18,3.5],"line-opacity":.85}});
+
+  // individual images (dots)
+  map.addLayer({id:"img",type:"circle",source:"mapillary","source-layer":"image",minzoom:14,
+    paint:{"circle-radius":["interpolate",["linear"],["zoom"],14,2,20,5],
+           "circle-color":["case",["==",["get","is_pano"],true],"#ffb238",ageColor()],
+           "circle-stroke-width":.5,"circle-stroke-color":"#070a0f"}});
+
+  ["seq","img"].forEach(l=>{
+    map.on("click",l,onPick);
+    map.on("mouseenter",l,()=>map.getCanvas().style.cursor="pointer");
+    map.on("mouseleave",l,()=>map.getCanvas().style.cursor="");
+  });
+  applyFilters();
+}
+
+/* ---------- date + pano filters ---------- */
+function ms(id){ const v=document.getElementById(id).value; return v?Date.parse(v):null; }
+// yellow for panoramas, otherwise recency-blue (or flat blue) — shared by every coverage layer
+function featColor(){
+  const base = ageByRecency ? ageColor() : "#39c2ff";
+  return ["case",["==",["get","is_pano"],true],"#ffb238", base];
+}
+function applyFilters(){
+  const f=ms("from"), t=ms("to");
+  const clauses=["all"];
+  if(f) clauses.push([">=",["to-number",["get","captured_at"]],f]);
+  if(t) clauses.push(["<=",["to-number",["get","captured_at"]],t+86400000]); // include end day
+  if(panoOnly) clauses.push(["==",["get","is_pano"],true]);
+  const filter = clauses.length>1?clauses:null;
+
+  // same date + 360 filter applied to all three coverage layers (overview / sequence / image)
+  ["overview","seq","img"].forEach(l=>{ if(map.getLayer(l)) map.setFilter(l,filter); });
+
+  // same colour rule everywhere, so panoramas read yellow at every zoom level
+  const col=featColor();
+  if(map.getLayer("overview")) map.setPaintProperty("overview","circle-color",col);
+  if(map.getLayer("seq")) map.setPaintProperty("seq","line-color",col);
+  if(map.getLayer("img")) map.setPaintProperty("img","circle-color",col);
+
+  document.getElementById("lg-old").textContent = f?new Date(f).getFullYear():"2013";
+  document.getElementById("lg-new").textContent = t?new Date(t).getFullYear():String(new Date().getFullYear());
+}
+
+/* ---------- street-level viewer ---------- */
+let mly=null;
+async function onPick(e){
+  const p=e.features[0].properties;
+  if(p.id && e.features[0].layer.id==="img"){ openViewer(String(p.id)); return; } // image dot
+  if(p.image_id){ openViewer(String(p.image_id)); return; }                       // some tiles carry it
+  if(p.id){ // sequence id -> fetch its images and open the first
+    try{
+      const r=await fetch(`https://graph.mapillary.com/image_ids?sequence_id=${p.id}&access_token=${TOKEN}`);
+      const d=await r.json();
+      if(d.data&&d.data.length) openViewer(String(d.data[0].id));
+    }catch(_){}
+  }
+}
+function openViewer(imageId,props){
+  document.getElementById("viewer").classList.add("open");
+  if(!mly){
+    mly=new mapillary.Viewer({accessToken:TOKEN,container:"mly",imageId});
+    mly.on("image",ev=>{
+      const d=ev.image; const date=d.capturedAt?new Date(d.capturedAt).toISOString().slice(0,10):"—";
+      document.getElementById("vmeta").innerHTML=`<b>${date}</b> · ${d.creatorUsername?("@"+d.creatorUsername):"unknown"} ${d.isPano?"· 360°":""}`;
+    });
+  } else { mly.moveTo(imageId).catch(()=>{}); }
+  setTimeout(()=>mly&&mly.resize(),350);
+}
+document.getElementById("vclose").onclick=()=>document.getElementById("viewer").classList.remove("open");
+
+/* ---------- UI wiring ---------- */
+let panoOnly=false, ageByRecency=true;
+
+// collapsible control panel
+const panel=document.getElementById("panel"), collapseBtn=document.getElementById("collapseBtn");
+document.getElementById("panelHead").addEventListener("click",()=>{
+  const c=panel.classList.toggle("collapsed");
+  collapseBtn.textContent = c ? "+" : "−";
+});
+
+document.getElementById("basemaps").addEventListener("click",e=>{
+  const b=e.target.closest("button"); if(!b)return;
+  [...e.currentTarget.children].forEach(x=>x.classList.remove("on")); b.classList.add("on");
+  setBase(b.dataset.base);
+});
+document.querySelectorAll(".preset").forEach(btn=>btn.onclick=()=>{
+  const d=+btn.dataset.days;
+  const to=new Date(); const from=d?new Date(Date.now()-d*86400000):new Date(T2013);
+  document.getElementById("to").value=to.toISOString().slice(0,10);
+  document.getElementById("from").value=from.toISOString().slice(0,10);
+  applyFilters();
+});
+["from","to"].forEach(id=>document.getElementById(id).addEventListener("change",applyFilters));
+document.getElementById("t-pano").onclick=function(){panoOnly=!panoOnly;this.classList.toggle("on");applyFilters();};
+document.getElementById("t-age").onclick=function(){ageByRecency=!ageByRecency;this.classList.toggle("on");applyFilters();};
+
+/* ---------- geocoder (Nominatim) ---------- */
+const q=document.getElementById("q"), results=document.getElementById("results");
+let qTimer;
+q.addEventListener("input",()=>{
+  clearTimeout(qTimer);
+  if(q.value.length<3){results.style.display="none";return;}
+  qTimer=setTimeout(async()=>{
+    const r=await fetch(`https://nominatim.openstreetmap.org/search?format=json&limit=5&q=${encodeURIComponent(q.value)}`);
+    const data=await r.json();
+    results.innerHTML=data.map(d=>`<div data-lat="${d.lat}" data-lon="${d.lon}">${d.display_name}</div>`).join("");
+    results.style.display=data.length?"block":"none";
+  },350);
+});
+results.addEventListener("click",e=>{
+  const d=e.target.closest("div"); if(!d)return;
+  map.flyTo({center:[+d.dataset.lon,+d.dataset.lat],zoom:16});
+  results.style.display="none"; q.value="";
+});
+
+/* ---------- boot ---------- */
+function start(){
+  if(map.loaded()){ setBase("dark"); addCoverage(); }
+  else map.once("load",()=>{ setBase("dark"); addCoverage(); });
+}
+const gate=document.getElementById("gate");
+if(TOKEN && !TOKEN.includes("XXXX")){ gate.classList.add("hide"); start(); }
+document.getElementById("tokgo").onclick=()=>{
+  const v=document.getElementById("tok").value.trim();
+  if(!v.startsWith("MLY|")){document.getElementById("tok").style.borderColor="#ff5d5d";return;}
+  TOKEN=v; gate.classList.add("hide"); start();
+};
+document.getElementById("tok").addEventListener("keydown",e=>{if(e.key==="Enter")document.getElementById("tokgo").click();});
+</script>
+</body>
+</html>
