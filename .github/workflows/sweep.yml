@@ -18,6 +18,7 @@ concurrency:
 jobs:
   sweep:
     runs-on: ubuntu-latest
+    timeout-minutes: 30            # hard ceiling; the script also self-stops sooner
     steps:
       - uses: actions/checkout@v4
 
@@ -25,7 +26,7 @@ jobs:
         with:
           python-version: "3.12"
 
-      - run: pip install mapbox-vector-tile
+      - run: pip install mapbox-vector-tile matplotlib
 
       - name: Run sweep
         env:
@@ -35,11 +36,16 @@ jobs:
           # SWEEP_BUDGET: "45000"
         run: python sweep.py
 
+      - name: Build stats for the README
+        if: always()
+        run: python stats.py
+
       - name: Commit snapshot
+        if: always()
         run: |
           git config user.name  "sweep-bot"
           git config user.email "actions@users.noreply.github.com"
-          git add archive
+          git add archive stats
           if git diff --cached --quiet; then
             echo "No changes to commit."
           else
