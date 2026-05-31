@@ -1,55 +1,54 @@
 #!/usr/bin/env python3
 """
-Rolling global sweep of Mapillary street-level coverage.
+Rolling global sweep of Mapillary street-level coverage (concurrent + time-capped).
 
-WHAT IT DOES
-  Walks the world tile-by-tile a little each day, recording WHERE imagery
-  exists, how recent it is, and whether it's 360 - never the images
-  themselves. Over repeated daily runs it completes a full global pass,
-  then starts the next one, so you build up a time series of coverage.
+Each run walks a slice of the globe, recording WHERE coverage exists, how recent
+it is, and whether it's 360 - never the images. A cursor remembers progress so
+runs resume where the last stopped; a full global pass spans ~2-3 weeks of daily
+runs, then repeats.
 
-  It is resumable: a cursor file remembers how far the current pass got,
-  so each run picks up where the last stopped and no run exceeds the
-  Mapillary tile budget (50k requests/day per app).
+Stops at the first of: tile budget (SWEEP_BUDGET, < Mapillary's 50k/day) or wall
+clock (SWEEP_MAX_SECONDS). Saves the cursor after every chunk, so a cut-short run
+still makes progress. Aborts immediately with a clear message if the token is bad.
 
-HOW IT STAYS CHEAP
-  It enumerates the globe at a coarse zoom (BASE_Z) and only descends to
-  the fine zoom (TARGET_Z) inside tiles that actually contain coverage -
-  empty ocean / wilderness is skipped after a single cheap probe.
-
-OUTPUT (all under OUTDIR, committed to the repo by the workflow)
+OUTPUT (under SWEEP_OUT, default ./archive)
   cursor.json                      {cursor, pass, pass_started}
-  state/<BASE_Z>_<bx>_<by>.json    latest coverage under that base tile:
-                                     { "Z/X/Y": [seq_count, newest_day, pano_count], ... }
-  changes/<YYYY-MM-DD>.jsonl       one row per detected change:
-                                     {"t":"Z/X/Y","old":[...]|null,"new":[...]|null}
-                                     old=null -> newly appeared
-                                     new=null -> coverage removed
+  state/<BASE_Z>_<bx>_<by>.json    { "Z/X/Y": [seq_count, newest_day, pano_count] }
+  changes/<YYYY-MM-DD>.jsonl       {"t":"Z/X/Y","old":[...]|null,"new":[...]|null}
 
-  This is the ARCHIVE plane only. The website still opens imagery from the
-  LIVE Mapillary plane on click, so click-to-view never goes stale.
-
-TUNING (env vars, no code edits needed)
-  SWEEP_TARGET_Z  finer = more detail but a longer full pass
-                    z10 ~ town (fast)   z11 ~ district (default)   z12+ ~ street (slow)
-  SWEEP_BASE_Z    coarse enumeration level (default 7)
-  SWEEP_BUDGET    max tile fetches per run (default 45000, under the 50k cap)
+TUNING (env vars)
+  SWEEP_TARGET_Z   default 11   finer = more detail, longer pass
+  SWEEP_BASE_Z     default 7    coarse enumeration level
+  SWEEP_BUDGET     default 45000 max tile fetches per run
+  SWEEP_MAX_SECONDS default 1500 wall-clock cap per run (seconds)
+  SWEEP_WORKERS    default 24   concurrent fetches
 """
-import os, sys, json, datetime, urllib.request, urllib.error
+import os, sys, json, time, glob, datetime, threading, urllib.request, urllib.error
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 try:
     import mapbox_vector_tile
 except ImportError:
     sys.exit("Missing dependency. Run: pip install mapbox-vector-tile")
 
-TOKEN     = os.environ.get("MAPILLARY_TOKEN", "")
-BASE_Z    = int(os.environ.get("SWEEP_BASE_Z", "7"))
-TARGET_Z  = int(os.environ.get("SWEEP_TARGET_Z", "11"))
-BUDGET    = int(os.environ.get("SWEEP_BUDGET", "45000"))
-OUTDIR    = os.environ.get("SWEEP_OUT", "archive")
-URL       = "https://tiles.mapillary.com/maps/vtp/mly1_public/2/{z}/{x}/{y}?access_token={t}"
+TOKEN       = os.environ.get("MAPILLARY_TOKEN", "").strip()
+BASE_Z      = int(os.environ.get("SWEEP_BASE_Z", "7"))
+TARGET_Z    = int(os.environ.get("SWEEP_TARGET_Z", "11"))
+BUDGET      = int(os.environ.get("SWEEP_BUDGET", "45000"))
+MAX_SECONDS = int(os.environ.get("SWEEP_MAX_SECONDS", "1500"))
+WORKERS     = int(os.environ.get("SWEEP_WORKERS", "24"))
+CHUNK       = int(os.environ.get("SWEEP_CHUNK", "48"))
+OUTDIR      = os.environ.get("SWEEP_OUT", "archive")
+URL = "https://tiles.mapillary.com/maps/vtp/mly1_public/2/{z}/{x}/{y}?access_token={t}"
 
-fetched = 0  # tiles requested this run
+_lock = threading.Lock()
+fetched = 0
+_stop = False
+_auth_failed = False
+
+
+class AuthError(Exception):
+    pass
 
 
 class BudgetReached(Exception):
@@ -61,21 +60,32 @@ def today():
 
 
 def fetch_tile(z, x, y):
-    """Return raw .pbf bytes, or None for empty/missing. Raises BudgetReached at the cap."""
-    global fetched
-    if fetched >= BUDGET:
-        raise BudgetReached()
-    fetched += 1
-    url = URL.format(z=z, x=x, y=y, t=TOKEN)
+    """Return raw .pbf bytes or None (empty). Raises AuthError / BudgetReached to halt."""
+    global fetched, _stop, _auth_failed
+    with _lock:
+        if _auth_failed:
+            raise AuthError()
+        if _stop or fetched >= BUDGET:
+            _stop = True
+            raise BudgetReached()
+        fetched += 1
     try:
-        with urllib.request.urlopen(url, timeout=30) as r:
+        with urllib.request.urlopen(URL.format(z=z, x=x, y=y, t=TOKEN), timeout=30) as r:
             return r.read()
     except urllib.error.HTTPError as e:
-        if e.code == 429:           # rate limited -> stop cleanly, resume next run
+        if e.code in (401, 403):
+            with _lock:
+                _auth_failed = True
+            raise AuthError("Mapillary rejected the token (HTTP {}). Check the MAPILLARY_TOKEN secret.".format(e.code))
+        if e.code == 429:        # daily rate limit hit -> stop cleanly, resume next run
+            with _lock:
+                _stop = True
             raise BudgetReached()
-        return None                 # 204/404/etc -> treat as empty
+        return None              # 204/404/etc -> empty
+    except (AuthError, BudgetReached):
+        raise
     except Exception:
-        return None
+        return None              # transient network error -> treat as empty
 
 
 def decode(raw):
@@ -89,19 +99,15 @@ def decode(raw):
 
 def has_coverage(raw):
     d = decode(raw)
-    if not d:
-        return False
-    seq = d.get("sequence")
-    return bool(seq and seq.get("features"))
+    return bool(d and d.get("sequence") and d["sequence"].get("features"))
 
 
 def target_stats(raw):
-    """At TARGET_Z summarise the sequence layer -> [count, newest_day, pano_count]."""
     d = decode(raw)
     feats = (d.get("sequence") or {}).get("features", []) if d else []
     if not feats:
         return None
-    newest, panos = 0, 0
+    newest = panos = 0
     for f in feats:
         p = f.get("properties", {}) or {}
         ca = p.get("captured_at") or 0
@@ -113,7 +119,6 @@ def target_stats(raw):
 
 
 def descend(z, x, y, out):
-    """Fetch (z,x,y); if it has coverage, recurse into children down to TARGET_Z."""
     raw = fetch_tile(z, x, y)
     if not has_coverage(raw):
         return
@@ -125,6 +130,12 @@ def descend(z, x, y, out):
     for dx in (0, 1):
         for dy in (0, 1):
             descend(z + 1, 2 * x + dx, 2 * y + dy, out)
+
+
+def process_base(bx, by):
+    out = {}
+    descend(BASE_Z, bx, by, out)
+    return bx, by, out
 
 
 def state_path(bx, by):
@@ -144,7 +155,6 @@ def save_cursor(s):
 
 
 def diff(prev, cur):
-    """Yield change rows between two {tile: stats} dicts."""
     for k, v in cur.items():
         if k not in prev:
             yield {"t": k, "old": None, "new": v}
@@ -155,35 +165,57 @@ def diff(prev, cur):
             yield {"t": k, "old": v, "new": None}
 
 
+def persist(bx, by, out, changes):
+    sp = state_path(bx, by)
+    prev = json.load(open(sp)) if os.path.exists(sp) else {}
+    changes.extend(diff(prev, out))
+    if out:
+        os.makedirs(os.path.dirname(sp), exist_ok=True)
+        json.dump(out, open(sp, "w"), separators=(",", ":"))
+    elif os.path.exists(sp):
+        os.remove(sp)
+
+
+def probe():
+    """Validate the token before the big loop (Berlin z14 tile). Aborts on auth error."""
+    raw = fetch_tile(14, 8802, 5382)
+    print("auth probe ok ({})".format("coverage seen" if has_coverage(raw) else "probe tile empty, fine"))
+
+
 def run():
     n = 1 << BASE_Z
     total = n * n
     s = load_cursor()
     i = s["cursor"]
     date = today()
-    changes, processed = [], 0
+    start = time.time()
+    changes, done = [], 0
 
-    while i < total:
-        if fetched >= BUDGET:
-            break
-        bx, by = i % n, i // n
-        out = {}
-        try:
-            descend(BASE_Z, bx, by, out)
-        except BudgetReached:
-            break  # leave cursor on this tile so we resume it next run
+    probe()  # raises AuthError -> exits below
 
-        sp = state_path(bx, by)
-        prev = json.load(open(sp)) if os.path.exists(sp) else {}
-        changes.extend(diff(prev, out))
-        if out:
-            os.makedirs(os.path.dirname(sp), exist_ok=True)
-            json.dump(out, open(sp, "w"), separators=(",", ":"))
-        elif os.path.exists(sp):
-            os.remove(sp)
-
-        i += 1
-        processed += 1
+    with ThreadPoolExecutor(max_workers=WORKERS) as ex:
+        while i < total:
+            if fetched >= BUDGET or (time.time() - start) > MAX_SECONDS:
+                break
+            chunk = [(j % n, j // n) for j in range(i, min(i + CHUNK, total))]
+            futs = {ex.submit(process_base, bx, by): (bx, by) for bx, by in chunk}
+            results, partial = [], False
+            try:
+                for f in as_completed(futs):
+                    results.append(f.result())
+            except BudgetReached:
+                partial = True
+                for f in futs:
+                    if f.done() and not f.exception():
+                        results.append(f.result())
+            for bx, by, out in results:
+                persist(bx, by, out, changes)
+            i = min(i + CHUNK, total)
+            s["cursor"] = i
+            save_cursor(s)
+            done += len(results)
+            if partial:
+                break
 
     wrapped = False
     if i >= total:
@@ -198,11 +230,14 @@ def run():
             for c in changes:
                 fh.write(json.dumps(c, separators=(",", ":")) + "\n")
 
-    print("date={} base_tiles_done={} fetched={} changes={} cursor={}/{} pass={} wrapped={}".format(
-        date, processed, fetched, len(changes), i, total, s["pass"], wrapped))
+    print("date={} base_done={} fetched={} secs={:.0f} changes={} cursor={}/{} pass={} wrapped={}".format(
+        date, done, fetched, time.time() - start, len(changes), i, total, s["pass"], wrapped))
 
 
 if __name__ == "__main__":
     if not TOKEN:
         sys.exit("Set MAPILLARY_TOKEN (your MLY|... client token) in the environment.")
-    run()
+    try:
+        run()
+    except AuthError as e:
+        sys.exit("AUTH ERROR: {}".format(e))
