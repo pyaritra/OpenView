@@ -43,8 +43,8 @@ jobs:
       - name: Commit snapshot
         if: always()
         run: |
-          git config user.name  "sweep-bot"
-          git config user.email "actions@users.noreply.github.com"
+          git config user.name  "pyaritra"
+          git config user.email "65927743+pyaritra@users.noreply.github.com"
           git add archive stats
           if git diff --cached --quiet; then
             echo "No changes to commit."
