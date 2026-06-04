@@ -1,17 +1,17 @@
 {
-  "tiles_with_coverage": 155,
-  "sequences": 878,
-  "tiles_with_360": 20,
+  "tiles_with_coverage": 152,
+  "sequences": 872,
+  "tiles_with_360": 18,
   "by_year": {
     "2014": 1,
     "2015": 118,
-    "2016": 7,
+    "2016": 6,
     "2017": 4,
-    "2018": 10,
+    "2018": 8,
     "2021": 1,
     "2023": 3,
     "2024": 10,
     "2025": 1
   },
-  "generated": "2026-06-03 08:28 UTC"
+  "generated": "2026-06-04 08:25 UTC"
 }
