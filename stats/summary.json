@@ -1,6 +1,6 @@
 {
-  "tiles_with_coverage": 319,
-  "sequences": 2569,
+  "tiles_with_coverage": 320,
+  "sequences": 2578,
   "tiles_with_360": 61,
   "by_year": {
     "2014": 1,
@@ -13,8 +13,8 @@
     "2021": 17,
     "2023": 3,
     "2024": 14,
-    "2025": 57,
+    "2025": 58,
     "2026": 34
   },
-  "generated": "2026-08-26 04:27 UTC"
+  "generated": "2026-08-27 14:10 UTC"
 }
