@@ -247,17 +247,18 @@
 
 <script>
 /* ============================================================
-   CONFIG — paste your Mapillary client token here to skip the gate
+   CONFIG — Mapillary token and CARTo token (required after AUg 2026 update)
    ============================================================ */
 let TOKEN = "MLY|26242742698734519|eee3bd3e12794ad4da21628b8590e76b";
+const CARTO_KEY = "cb1_3msj_1_defc9f3e4ea8d8dfe339ced1";
 
 const MLY_TILES = t => `https://tiles.mapillary.com/maps/vtp/mly1_public/2/{z}/{x}/{y}?access_token=${t}`;
 const T2013 = Date.UTC(2013,0,1);
 
 /* ---------- base layer definitions (free raster sources) ---------- */
 const BASES = {
-  dark:  {tiles:["https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png"], attr:"© CARTO © OpenStreetMap"},
-  light: {tiles:["https://a.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png"], attr:"© CARTO © OpenStreetMap"},
+  dark:  {tiles:[`https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png?key=${CARTO_KEY}`], attr:"© CARTO © OpenStreetMap"},
+  light: {tiles:[`https://a.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png?key=${CARTO_KEY}`], attr:"© CARTO © OpenStreetMap"},
   sat:   {tiles:["https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"], attr:"© Esri"},
   osm:   {tiles:["https://tile.openstreetmap.org/{z}/{x}/{y}.png"], attr:"© OpenStreetMap"},
   none:  null
