@@ -50,7 +50,7 @@ was removed. The `changes/` logs are the raw material for the time-over-time vie
 Rough full-pass duration at 45k fetches/day:
 
 - `TARGET_Z=10` (town-level): about a week.
-- `TARGET_Z=11` (district-level, default): about two to three weeks.
+- `TARGET_Z=11` (district-level, default): about two to three (five - seven if random cron) weeks.
 - `TARGET_Z=12+` (true street-level): a month or more globally.
 
 True street-level detail across the *entire* globe is not reachable in two weeks
@@ -65,5 +65,3 @@ from Mapillary, or scope the sweep to a region.
 - **Completeness vs. cost**: skipping relies on coverage showing up at `BASE_Z`.
   Extremely sparse, isolated imagery that doesn't register at the coarse zoom can
   be missed. Lower `BASE_Z` for safety, raise it to spend less on enumeration.
-- The token here is read-only; storing it as an Actions secret is cleaner than
-  inlining it, even though the same token is also public in the site's client code.
