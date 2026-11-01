@@ -5,7 +5,7 @@ name: mapillary-sweep
 
 on:
   schedule:
-    - cron: "17 3 * * *"        # daily at 03:17 UTC
+    - cron: "17 * * * *" 
   workflow_dispatch: {}          # also runnable on demand from the Actions tab
 
 permissions:
@@ -20,28 +20,52 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30            # hard ceiling; the script also self-stops sooner
     steps:
+      - name: Random-slot gate
+        id: gate
+        run: |
+          python3 - <<'EOF'
+          import os, random, datetime as dt
+          # ---- config ----
+          RUNS_PER_WEEK = 3
+          # ----------------
+          now = dt.datetime.now(dt.timezone.utc)
+          if os.environ["GITHUB_EVENT_NAME"] == "workflow_dispatch":
+              go = True                                   # manual runs always go
+          else:
+              y, w, _ = now.isocalendar()
+              rng = random.Random(f"{y}-{w}")             # same picks all week
+              days = rng.sample(range(7), RUNS_PER_WEEK)  # 0=Mon ... 6=Sun
+              slots = {d: rng.randrange(24) for d in days}
+              go = slots.get(now.weekday()) == now.hour
+              print("this week's slots (weekday: UTC hour):", slots)
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              f.write(f"run={'true' if go else 'false'}\n")
+          print("run =", go)
+          EOF
+
       - uses: actions/checkout@v4
+        if: steps.gate.outputs.run == 'true'
 
       - uses: actions/setup-python@v5
+        if: steps.gate.outputs.run == 'true'
         with:
           python-version: "3.12"
 
       - run: pip install mapbox-vector-tile matplotlib
+        if: steps.gate.outputs.run == 'true'
 
       - name: Run sweep
+        if: steps.gate.outputs.run == 'true'
         env:
           MAPILLARY_TOKEN: ${{ secrets.MAPILLARY_TOKEN }}
-          # optional tuning (defaults shown):
-          # SWEEP_TARGET_Z: "11"
-          # SWEEP_BUDGET: "45000"
         run: python -u sweep.py
 
       - name: Build stats for the README
-        if: always()
+        if: always() && steps.gate.outputs.run == 'true'
         run: python -u stats.py
 
       - name: Commit snapshot
-        if: always()
+        if: always() && steps.gate.outputs.run == 'true'
         run: |
           git config user.name  "pyaritra"
           git config user.email "65927743+pyaritra@users.noreply.github.com"
